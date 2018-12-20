@@ -481,7 +481,9 @@ class ImageStack:
         slices, axes = self.get_slice(indices)
         reordered_array = np.moveaxis(slices, [-2, -1], [0, 1])
 
-        napari_gui.imshow(reordered_array, multichannel=False)
+        viewer = napari_gui.imshow(reordered_array, multichannel=False)
+
+        return viewer
 
     def show_stack(
             self, indices: Mapping[Indices, Union[int, slice]],
