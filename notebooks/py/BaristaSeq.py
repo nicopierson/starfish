@@ -37,10 +37,14 @@ rounds = np.arange(img.num_rounds)
 slice_indices = product(channels, rounds)
 
 for ch, round_, in slice_indices:
-    indices = {Indices.CH: ch, Indices.ROUND: round_}
+    indices = {Indices.CH: ch, Indices.ROUND: round_, Indices.Z: 0}
     tile = z_projected_image.get_slice(indices)[0]
     transformed = warp(tile, transform)
-    z_projected_image.set_slice(indices, transformed.astype(np.float32))
+    z_projected_image.set_slice(
+        indices=indices,
+        data=transformed.astype(np.float32),
+        axes=[Indices.CH, Indices.ROUND, Indices.Z]
+    )
 
 
 # Median Filter
