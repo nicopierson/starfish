@@ -37,13 +37,12 @@ rounds = np.arange(img.num_rounds)
 slice_indices = product(channels, rounds)
 
 for ch, round_, in slice_indices:
-    indices = {Indices.CH: ch, Indices.ROUND: round_, Indices.Z: 0}
+    indices = {Indices.ROUND: round_, Indices.CH: ch, Indices.Z: 0}
     tile = z_projected_image.get_slice(indices)[0]
     transformed = warp(tile, transform)
     z_projected_image.set_slice(
         indices=indices,
         data=transformed.astype(np.float32),
-        axes=[Indices.CH, Indices.ROUND, Indices.Z]
     )
 
 
@@ -91,15 +90,19 @@ def do_bleed_correction(stack):
         bleed = stack.get_slice({Indices.CH: int(ch1)})[0] * constant
         img_to_correct = stack.get_slice({Indices.CH: int(ch2)})[0]
         corrected = np.maximum(img_to_correct - bleed, 0)
-        bleed_corrected.set_slice({Indices.CH: int(ch2)}, corrected)
+        bleed_corrected.set_slice(
+            {Indices.CH: int(ch2)},
+            corrected,
+            axes=[Indices.ROUND, Indices.Z]
+        )
     return bleed_corrected
 
 
 bleed_corrected = do_bleed_correction(low_passed)
 
 
-# Extract the background (morphological opening)
 def opening(image):
+    """Extract the background (morphological opening)"""
     # ball is extremely slow, using disk instead
     selem = skimage.morphology.disk(radius=20)
     background = skimage.morphology.opening(image, selem=selem)
@@ -110,16 +113,7 @@ background_subtracted = bleed_corrected.apply(
     opening, in_place=False, verbose=True
 )
 
-background_subtracted.show_stack({Indices.ROUND: 0}, rescale=True)
-
 # Registration
-
-# They do some registration pre-processing:
-# Channel 3 is translated down 1000 intensity: `np.maximum(0, img - 1000)`
-# Channel 1 is multiplied by 5.
-# Question for Xiaoyin: What's the point of these modifications?
-# Answer: that was for previous experiments and is no longer necessary
-
 
 # Registration is necessary.
 # To do the alignment in the small tiles is challenging because there are potentially large shifts
@@ -131,6 +125,7 @@ background_subtracted.show_stack({Indices.ROUND: 0}, rescale=True)
 # In the long term, looking at the smaller tiles may give better results (no stitching errors)
 # (can result in doubling of spots) -- this would certainly screw up segmentation.
 
+
 round_1 = background_subtracted.get_slice({Indices.ROUND: 0})[0].reshape(1, 4, 1, 1000, 800)
 registration_reference_stack = starfish.ImageStack.from_numpy_array(round_1)
 
@@ -140,49 +135,34 @@ reg = Registration.FourierShiftRegistration(  # type: ignore
 
 registered = reg.run(background_subtracted)
 
-# To check this, sum the images across channels before and after, look at a small subset of the
-# data and check the cell positioning.
+# registration here works pretty well, but we need to fit a _rotation_
+# it's easy to view the failure state by creating an RGB image of the data
+# non-rigid ICP will be needed for this data.
 
-# not being done anymore; was being done because the channel was very noisy.
-# read each of the channels
-# ch3 = np.maximum(ch3 - 1000, 0) * 1.2
-# ch1 *= 5
-# understand why this is being done?
-ch_data = {}
-for ch_num in np.arange(registered.num_chs):
-    data = registered.get_slice({Indices.CH: ch_num})[0]
-    ch_data[ch_num] = pd.Series(np.ravel(data)).describe()
-
-ch_data
 
 # Find Rolonies
 
 # Authors use FIJI rolony finding. This method takes a blob size and an aboslute tolerance which
 # defines the (subtractive) difference between the maximum and the (local) background.
-
-
-test_image = registered.get_slice({Indices.ROUND: 0, Indices.CH: 0})[0]
-
-plt.hist(np.ravel(test_image), log=True, bins=50)
-
-SpotFinder.GaussianSpotDetector()  # type: ignore
-
-lmpf = SpotFinder.LocalMaxPeakFinder(  # type: ignore
-    spot_diameter=11, min_mass=0.01, max_size=100, separation=11 * 1.5,
-    is_volume=False, preprocess=False, noise_size=[0, 0, 0]
-)
+# the closest type of spot finder we have is the Trackpy locate. However, it works badly,
+# likely due to the poor registration. This data _really_ needs rotation.
 
 # Their spots are about 7 pixels
 # Bleed through isn't always completely corrected. In these cases there can be small (1.5px)
-# shifts across channels to correct for this, merge rolonies within 1.5px of each other.
+# shifts across channels to correct for this, authors merge rolonies within 1.5px of each other.
 
-# doing the max projection could result in information loss because the per-channel information
+# they prefer finding spots in each channel to doing the max projection. They state that the max
+# projection could result in information loss because the per-channel information
 # might allow separation of rolonies that are overlaping in the max projection, but separate in
 # channel space.
 
-# If the channels are not balanced (one is noisy) then you hurt the weaker channels.
+# # this errors, I think because no spots are found.
+# lmpf = SpotFinder.TrackpyLocalMaxPeakFinder(  # type: ignore
+#     spot_diameter=11, min_mass=0.01, max_size=100, separation=11 * 1.5,
+#     is_volume=False, preprocess=False, noise_size=[0, 0, 0]
+# )
 
-mp = registered.max_proj(Indices.Z, Indices.CH, Indices.ROUND)
+# the pixel-based approach works much better.
 
 psd = SpotFinder.PixelSpotDetector(  # type: ignore
     codebook=exp.codebook,
@@ -192,87 +172,10 @@ psd = SpotFinder.PixelSpotDetector(  # type: ignore
 
 intensities, ccdr = psd.run(registered)
 
-# non-rigid ICP will be needed for this data.
-
-# Is there a multiplication between the codebook and the image intensity values that could be used
-# to visualize a given code?
-
-plt.scatter(intensities['x'], intensities['y'], alpha=0.2, c='r')
-
-lmpf = starfish.spots.SpotFinder.LocalMaxPeakFinder(  # type: ignore
-    spot_diameter=7, min_mass=0.0001, max_size=100,
-    separation=0.5, noise_size=(1, 1), is_volume=False
-)
-results = lmpf.run(registered)
-
-intensities[0].shape
-
-results = {}
-
-# write a spot detector
-rounds = np.arange(registered.num_rounds)
-channels = np.arange(registered.num_chs)
-slice_indices = product(channels, rounds)
-for ch, round_ in slice_indices:
-    results[ch, round_] = skimage.feature.blob_log(
-        registered.get_slice({Indices.CH: ch, Indices.ROUND: round_})[0],
-        min_sigma=0.2, max_sigma=4, num_sigma=30, threshold=0.0003, overlap=0.5, log_scale=False
-    )
-    break
-
-# Just loop over channels
-
-channels = np.arange(registered.num_chs)
-round_ = 0
-for ch in channels:
-    results[ch, round_] = skimage.feature.blob_log(
-        registered.get_slice({Indices.CH: ch, Indices.ROUND: round_})[0],
-        min_sigma=0.2, max_sigma=4, num_sigma=30, threshold=0.0003, overlap=0.5, log_scale=False
-    )
-
-
-def plot_on_image(image, results):
-    """results is from blob_log, image should be a 2d-image"""
-    showit.image(image, size=20, clim=(0, 0.05))
-    plt.scatter(results[:, 2], results[:, 1], alpha=0.4, c='r')
-
-
-plot_on_image(skimage.exposure.rescale_intensity(registered.get_slice({Indices.ROUND: 0, Indices.CH:0})[0][0, :, :]), results[0, 0])
-
-showit.image(skimage.exposure.rescale_intensity(skimage.filters.gaussian(registered.get_slice({Indices.CH: 1, Indices.ROUND: 0})[0][0, :, :], sigma=1)),
-             size=20, clim=(0, 0.05))
-
-showit.image(skimage.exposure.rescale_intensity(registered.get_slice({Indices.CH: 1, Indices.ROUND: 0})[0][0, :, :]), clim=(0, 0.1), size=20)
-
-results[0][0, :]
-
+# try gaussian spot finder
 gsd = SpotFinder.GaussianSpotDetector(
-    min_sigma=2, max_sigma=5, num_sigma=10, threshold=0.002, overlap=0.5, reference_image_from_max_projection=True
+    min_sigma=2, max_sigma=5, num_sigma=10, threshold=0.002, overlap=0.5,
+    reference_image_from_max_projection=True
 )
-
-registered.shape
 
 intensities = gsd.run(registered)
-
-codebook = exp.codebook
-
-psd = SpotFinder.PixelSpotDetector(codebook, distance_threshold=0.51, magnitude_threshold=0.0, min_area=0, max_area=np.inf, metric='euclidean')
-
-pixel_results, ccdr = psd.run(background_subtracted)
-
-
-pd.Series(*np.unique(codebook.decode_per_round_max(peak_results)['target'], return_counts=True)[::-1])
-
-decoded_peak_results = codebook.metric_decode(peak_results, max_distance=0.517, min_intensity=0, norm_order=2)
-
-ccdr.decoded_image.shape
-
-f, ax = plt.subplots(figsize=(10, 10))
-starfish.plot.decoded_spots(decoded_image=ccdr.decoded_image[10], ax=ax)
-
-proj_image = background_subtracted.max_proj(Indices.CH, Indices.ROUND, Indices.Z)
-
-
-plt.hist(np.ravel(proj_image), log=True)
-
-showit.image(proj_image[300:600, :300], clim=(0.0001, 0.002), size=10)
