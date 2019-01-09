@@ -125,7 +125,6 @@ background_subtracted = bleed_corrected.apply(
 # In the long term, looking at the smaller tiles may give better results (no stitching errors)
 # (can result in doubling of spots) -- this would certainly screw up segmentation.
 
-
 round_1 = background_subtracted.get_slice({Indices.ROUND: 0})[0].reshape(1, 4, 1, 1000, 800)
 registration_reference_stack = starfish.ImageStack.from_numpy_array(round_1)
 
@@ -134,6 +133,20 @@ reg = Registration.FourierShiftRegistration(  # type: ignore
 )
 
 registered = reg.run(background_subtracted)
+
+# check if translation was enough; max project channels and view rounds as an RGB image
+from skimage.exposure import rescale_intensity
+rgb = np.squeeze(registered.max_proj(Indices.CH).xarray.values).T
+plt.imshow(rescale_intensity(rgb))
+plt.show()
+
+# definitely still needs registration. Call spots, use those as anchors, and run registration
+# against the first round.
+
+# call spots
+for round in range(rgb.shape[-1]):
+    pass  # run spot finding to get peaks
+    # break into zones, select 25 highest intensity peaks in each quadrant.
 
 # registration here works pretty well, but we need to fit a _rotation_
 # it's easy to view the failure state by creating an RGB image of the data
