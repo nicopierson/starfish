@@ -51,7 +51,7 @@ for ch, round_, in slice_indices:
 
 # ======================= HIGH PASS FILTER TO ELIMINATE CAMERA NOISE ==============================
 
-ghp = starfish.image.Filter.GaussianHighhPass(sigma=1)
+ghp = starfish.image.Filter.GaussianHighPass(sigma=1)
 high_passed = ghp.run(z_projected_image, in_place=False)
 
 # ======================= CORRECT FOR BLEED THROUGH FOR ILLUMINA SBS ==============================
