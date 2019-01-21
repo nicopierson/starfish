@@ -106,7 +106,8 @@ def stack(
         spots: Optional[IntensityTable] = None,
         project_axes: Optional[Set[Axes]] = None,
         mask_intensities: float = 0.,
-        radius_multiplier: int = 1
+        radius_multiplier: int = 1,
+        markers: Optional[Iterable[Tuple[int, int, int, int, int]]]=None
 ):
     """
     Displays the image stack using Napari (https://github.com/Napari).
@@ -218,7 +219,17 @@ def stack(
         sizes = sizes[mask]
 
         viewer.add_markers(
-            coords=coords, face_color='white', edge_color='white', symbol='ring',
+            coords=coords, face_color='cyan', edge_color='cyan', symbol='ring',
+            size=sizes * radius_multiplier
+        )
+
+    # TODO ambrosejcarr remove this hack
+    if markers is not None:
+        coords = markers
+        sizes = np.full(coords.shape[0], fill_value=5)
+
+        viewer.add_markers(
+            coords=coords, face_color='cyan', edge_color='cyan', symbol='ring',
             size=sizes * radius_multiplier
         )
 

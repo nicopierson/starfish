@@ -15,6 +15,9 @@ a particular spot finder. So far, these characteristics include:
 2. Are your spots perfectly aligned, or do they require alignment?
 3. What kind of filtering do you want to run on your spots?
 
+# suggests that some kind of prior is needed from user about their spot size, or one could be
+# learned by starfish.
+
 Globally, this explores what users can do, given prior information about their spot characteristics.
 """
 import os
@@ -85,6 +88,7 @@ for s in selems:
 # starfish.display.stack(image)
 
 # it looks like the smallest radius (7) is doing the best job, use that.
+# weighted vs unweighted didn't make much of a difference.
 
 tophat = partial(white_tophat, selem=selems[0])
 
@@ -167,7 +171,7 @@ PixelSpotDecoder.PixelSpotDecoder
 # for blob_dog # TODO enter correct value.
 # TODO this threshold might not correspond to local maxima directly -- it's related to the
 # "scale space" -- what does this mean?
-threshold = np.percentile(np.ravel(quantile_normalized.xarray.values), 99.4)
+threshold = np.percentile(np.ravel(quantile_normalized.xarray.values), 98)
 
 # start with the BlobDetector; difference of hessians only works in 2d, so we're skipping that.
 # TODO think about removing DoH from the BlobDetector
@@ -358,48 +362,123 @@ for arr, axes in spot_results:
 # we could go back and increase the number of spots to search for in the other rounds...
 # and now I understand why they're doing this the way they are...
 # goal could be "fraction of spots that decode"
-round_dataframes = {k: pd.concat(v, axis=0) for k, v in round_data.items()}
+round_dataframes = {
+    k: pd.concat(v, axis=0).reset_index().drop('index', axis=1) for k, v in round_data.items()
+}
 
 # this will need to be generalized to volumetric data by adding Axes.Z.value
 traces = []
 template = cKDTree(round_dataframes[anchor_round][[Axes.X.value, Axes.Y.value]])
 for r in sorted(set(round_dataframes.keys()) - {anchor_round, }):
     query = cKDTree(round_dataframes[r][[Axes.X.value, Axes.Y.value]])
-    traces.append(tree.query_ball_tree(query, search_radius, p=2))
+    traces.append(template.query_ball_tree(query, search_radius, p=2))
 
 # build a hamming tree from the codebook (is there a way to generalize?)
 
-def measure_all(template_dataframe, image, spot_list):
+def measure_all(template_dataframe, image, x, y):
     template_dataframe = template_dataframe.copy()
     # only rounds 2 and above will have a spot list. consider factoring this out.
     if spot_list:
+
+        # toss multiplets for now.
         spot_indices = np.fromiter((r for r in indices if len(r) == 1), dtype=np.int)
         template_dataframe = template_dataframe.loc[spot_indices]
+
     # TODO generalize for Z
     intensities = image[template_dataframe[Axes.Y], template_dataframe[Axes.X]]
     template_dataframe['intensity'] = intensities
     return template_dataframe
 
-
 # Put the traces together; resolve multiplets as they come up.
+from starfish import IntensityTable  # noqa
+from starfish.types import SpotAttributes  # noqa
+
 template_data = round_dataframes[anchor_round]
 query_spot_indices = zip(*traces)
 num_correct = 0
-for anchor, indices in zip(template_data.index, query_spot_indices):
-    if any(not r for r in indices):  # if any round didn't find a spot, continue
-        continue
-    else:
-        # resolve multiplets; just toss for now.
-        if any(len(r) > 1 for r in indices):
-            continue
+N_CH=4  # noqa
+N_ROUND=4  # noqa
 
-        # TODO ideally here, build some kind of starfish object (SpotAttributes?)
-        # instead, build an IntensityTable directly to sidestep a refactor.
+# build SpotAttributes from anchor round
+attrs = round_dataframes[anchor_round].drop(Axes.CH, axis=1)
+attrs.columns = ['y', 'x', 'radius']
+attrs['z'] = np.zeros(attrs.shape[0], dtype=int)
+spot_attributes = SpotAttributes(attrs)
 
-        # TODO interesting CB question (make issue)
-        # have _correct_ measurements, how to deal with approximate x, y?
+# build an IntensityTable
+# this is a slow, loop based way to measure the intensities of each of the spots that are found
+# across the blob_dog results for each image. This should be vectorized, but is adequate to build
+# a spot detector that functions across rounds.
 
-        # how to validate that things are working property in this mode?
-        # plot all spots from first channel that _fail_ decoding, visually verify that there is no
-        # spot in other rounds
-        num_correct += 1
+feature_indices = []
+round_indices = []
+channel_indices = []
+values = []
+
+def add_spot_information_to_indexers(round_, spot_results, imagestack, spot_index, curr_feature):
+    # this function has side-effects on the above arrays
+    selector = {
+        Axes.ROUND: round_,
+        Axes.CH: spot_results.loc[spot_index, Axes.CH],
+        Axes.X: int(spot_results.loc[spot_index, Axes.X]),
+        Axes.Y: int(spot_results.loc[spot_index, Axes.Y]),
+        Axes.ZPLANE: 0  # TODO generalize
+    }
+
+    values.append(imagestack.xarray.sel(selector))
+    round_indices.append(selector[Axes.ROUND])
+    channel_indices.append(selector[Axes.CH])
+    feature_indices.append(curr_feature)
+
+feature_index = 0
+for anchor_index, indices in zip(template_data.index, query_spot_indices):
+
+    # add anchor spot information
+    add_spot_information_to_indexers(
+        anchor_round,
+        template_data,
+        quantile_normalized,
+        anchor_index,
+        feature_index,
+    )
+
+    # iterate through each of the other rounds
+    for round_, spot_indices in enumerate(indices, 1):
+
+        # we allow for more than one spot to occur within the search radius. For now, take only
+        # the closest spot. Later, we can evaluate if filtering based on hamming codes is needed
+        # here
+        for spot_index in spot_indices:
+            add_spot_information_to_indexers(
+                round_,
+                round_dataframes[round_],
+                quantile_normalized,
+                spot_index,
+                feature_index,
+            )
+            break  # skip spots after the first one
+
+    # the next iteration will examine the following spot in the anchor round, so we increment
+    feature_index += 1
+
+# fill the intensity table
+intensities = IntensityTable.empty_intensity_table(spot_attributes, n_ch=N_CH, n_round=N_ROUND)
+intensities.values = np.full_like(intensities.values, np.nan)
+intensities.values[
+    feature_indices,
+    np.array(channel_indices, dtype=int),
+    np.array(round_indices, dtype=int)
+] = values
+
+# evaluate our handywork by projecting across channel (as we've done to fill these arrays).
+# the logic should be that in a max-projection across channels, each round subsequent to the
+# anchor round should _also_ have spots that are detected.
+
+starfish.display.stack(quantile_normalized, intensities, project_axes={Axes.CH})
+
+# what we see instead is that the quantile normalization has failed to fully equalize the rounds,
+# and that the anchor round has very bright spots relative, in particular, to rounds 2 and 3. As a
+# result, we're not successfully calling spots in those rounds, which will cause decoding to fail.
+
+# how to adjust the spot finder to find the correct number of spots in each round? probably using
+# the logic from the existing PeakLocalMax spot finder.
