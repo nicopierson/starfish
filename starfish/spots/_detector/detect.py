@@ -231,6 +231,10 @@ def detect_spots(data_stack: ImageStack,
 
     group_by = {Axes.ROUND, Axes.CH}
 
+    # TODO this might need more refactoring -- "measure each" must include the long
+    # cai method that has additional post-processing (resolving if spots match or not across
+    # rounds). Need to think about how these spot finding approaches interact with the current
+    # factoring of these methods into "detect and measure"
     if reference_image is not None:
         # Throw error here if tiles are not aligned. Trying to do this with unregistered
         if not data_stack.tiles_aligned:

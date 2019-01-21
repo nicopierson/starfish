@@ -124,6 +124,7 @@ class BlobDetector(SpotFinderAlgorithmBase):
 
         rounded_blobs.data['intensity'] = measure_spot_intensity(
             data_image, rounded_blobs, self.measurement_function)
+        # TODO is this still needed?
         rounded_blobs.data['spot_id'] = np.arange(rounded_blobs.data.shape[0])
 
         return rounded_blobs
