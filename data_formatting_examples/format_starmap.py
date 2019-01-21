@@ -138,22 +138,22 @@ class StarMapTileFetcher(TileFetcher):
 
         """
         dinucleotides_to_channels = {
-            "AT": 4,
-            "CT": 3,
-            "GT": 2,
-            "TT": 1,
-            "AG": 3,
-            "CG": 4,
-            "GG": 1,
-            "TG": 2,
-            "AC": 2,
-            "CC": 1,
-            "GC": 4,
-            "TC": 3,
-            "AA": 1,
-            "CA": 2,
-            "GA": 3,
-            "TA": 4,
+            "AT": 3,
+            "CT": 2,
+            "GT": 1,
+            "TT": 0,
+            "AG": 2,
+            "CG": 3,
+            "GG": 0,
+            "TG": 1,
+            "AC": 1,
+            "CC": 0,
+            "GC": 3,
+            "TC": 2,
+            "AA": 0,
+            "CA": 1,
+            "GA": 2,
+            "TA": 3,
         }
 
         with open(os.path.join(self.input_dir, "genes.csv"), "r") as f:
