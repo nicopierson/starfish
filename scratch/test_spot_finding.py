@@ -231,36 +231,10 @@ assigned = ta.run(label_image, decoded_dog_intensities)
 # Create a count matrix based on this bad segmentation.
 counts = assigned.to_expression_matrix()
 
-
 ###################################################################################################
 # APPENDIX, WORK IN PROGRESS AFTER THIS POINT.
 
-# blob_dog can have trouble picking up small spots, try the blob_log instead
-threshold = np.percentile(np.ravel(quantile_normalized.xarray.values), 98.0)
-min_sigma = 0.7
-max_sigma = 3  # if set too high, this can merge adjacent spots; translate to pixel radius or w/e?
-num_sigma = 15  # how many is enough? #TODO dial it down until things break
-
-# pilot on a single slice, don't bother measuring across yet.
-from skimage.feature import blob_log  # noqa
-plane = quantile_normalized.xarray.sel(
-    {Axes.CH.value: 0, Axes.ROUND.value: 0, Axes.ZPLANE.value: 0}
-)
-test = blob_lob(
-    plane.values,
-    min_sigma=min_sigma, max_sigma=max_sigma, num_sigma=num_sigma, threshold=threshold
-)
-
-bd_log = SpotFinder.BlobDetector(
-    min_sigma, max_sigma, num_sigma, threshold=threshold, detector_method='blob_log',
-    is_volume=False
-)
-log_intensities = bd_log.run(quantile_normalized)
-starfish.display.stack(quantile_normalized, log_intensities, mask_intensities=threshold - 1e-5)
-
 ###################################################################################################
-# can we build tooling to match spots across rounds? apply blob_dog with the correct parameters
-
 # alternative: find spots in each round/channel, then align them using mutual nearest neighbors
 # we know the right parameters now, so apply this across rounds/channels.
 spot_finder = partial(
@@ -313,6 +287,7 @@ for r in rounds:
 # can abuse show_spots
 coords = pd.concat(overlaps, axis=0)
 coords['z'] = np.full(coords.shape[0], 0)
+
 starfish.display.stack(quantile_normalized, markers=coords[['x', 'y', 'r', 'c', 'z']])
 
 # def find_mutual_nn(data1, data2, k1, k2, n_jobs):
@@ -326,10 +301,9 @@ for index_2 in range(data2.shape[0]):
             mutual_1.append(index_1)
             mutual_2.append(index_2)
 
-# ok, I've looked at spots across rounds; they are definitely spots, but they produce some tricky
-# cases, the spots are definitely real, they're even slightly shifted. Since the codebook is sparse
-# it makes sense to build traces - at least one will be wrong, and hopefully a later hamming
-# filter will remove one of them.
+# ok, I've looked at spots across rounds; cases I inspected where multiple spots occur look like
+# they are due to crowding, not error. Since the codebook is sparse
+# it makes sense to build traces - hopefully a hamming filter will remove one of them.
 
 # since only 4% of spots do this, it doesn't seem bad to build the traces across rounds.
 # this is codebook dependent, I think.
@@ -373,7 +347,7 @@ for r in sorted(set(round_dataframes.keys()) - {anchor_round, }):
     query = cKDTree(round_dataframes[r][[Axes.X.value, Axes.Y.value]])
     traces.append(template.query_ball_tree(query, search_radius, p=2))
 
-# build a hamming tree from the codebook (is there a way to generalize?)
+# TODO build a hamming tree from the codebook (is there a way to generalize?)
 
 def measure_all(template_dataframe, image, x, y):
     template_dataframe = template_dataframe.copy()
