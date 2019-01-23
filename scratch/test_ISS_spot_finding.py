@@ -326,7 +326,7 @@ for i, (r, c) in enumerate(tiles):
 ###################################################################################################
 # MATCH SPOTS ACROSS ROUNDS
 
-# in which round do you want to see the local search
+# in which round do you want to seed the local search
 ANCHOR_ROUND = 0
 # what is the radius of the disk (2d) or sphere (3d) of the space that a spot can be found in?
 SEARCH_RADIUS = 3
