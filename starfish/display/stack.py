@@ -2,6 +2,8 @@ import warnings
 from collections import OrderedDict
 from typing import Iterable, List, Optional, Set, Tuple, Union
 
+import matplotlib.pyplot as plt
+import napari_gui
 import numpy as np
 
 from starfish.imagestack.imagestack import ImageStack
@@ -96,9 +98,15 @@ def _spots_to_markers(intensity_table: IntensityTable) -> Tuple[np.ndarray, np.n
     coords[:, 3] = np.tile(np.repeat(range(n_channels), n_rounds), n_features)
     coords[:, 4] = np.repeat(intensity_table[Features.AXIS][Axes.ZPLANE.value].values, code_length)
 
-    sizes = np.repeat(intensity_table.radius.values, code_length)
+    sizes = np.repeat(intensity_table.radius.values, code_length)[:, np.newaxis]
+    vector_sizes = np.concatenate(
+        [
+            np.repeat(np.zeros_like(sizes), 2, axis=1),  # no size in channels, rounds
+            np.repeat(sizes, 3, axis=1)  # allow spots to exist in 3d
+        ], axis=1
+    )
 
-    return coords, sizes
+    return coords, vector_sizes
 
 
 def stack(
@@ -193,8 +201,7 @@ def stack(
     with warnings.catch_warnings():
         warnings.filterwarnings('ignore', module='vispy.visuals.isocurve', lineno=22)
         # display the imagestack using napari
-        viewer = napari_gui.imshow(reordered_array, multichannel=False)
-    viewer._index = [0, 0, 0, 0, 0]  # initialize napari status bar
+        window = napari_gui.imshow(reordered_array, multichannel=False)
 
     if spots is not None:
 
@@ -213,24 +220,17 @@ def stack(
 
         if not np.sum(mask):
             warnings.warn(f'No spots passed provided intensity threshold of {mask_intensities}')
-            return viewer
+            return window
 
         coords = coords[mask, :]
-        sizes = sizes[mask]
+        sizes = sizes[mask, :]
+        # import pdb; pdb.set_trace()
+        assert sizes.shape == coords.shape
 
-        viewer.add_markers(
-            coords=coords, face_color='cyan', edge_color='cyan', symbol='ring',
-            size=sizes * radius_multiplier
+        window.viewer.add_markers(
+            coords=coords, face_color='c', edge_color='c', symbol='o',
+            size=sizes * radius_multiplier,
+            n_dimensional=True
         )
 
-    # TODO ambrosejcarr remove this hack
-    if markers is not None:
-        coords = markers
-        sizes = np.full(coords.shape[0], fill_value=5)
-
-        viewer.add_markers(
-            coords=coords, face_color='cyan', edge_color='cyan', symbol='ring',
-            size=sizes * radius_multiplier
-        )
-
-    return viewer
+    return window
