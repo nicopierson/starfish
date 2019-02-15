@@ -230,10 +230,6 @@ def detect_spots(data_stack: ImageStack,
 
     group_by = {Axes.ROUND, Axes.CH}
 
-    # TODO this might need more refactoring -- "measure each" must include the long
-    # cai method that has additional post-processing (resolving if spots match or not across
-    # rounds). Need to think about how these spot finding approaches interact with the current
-    # factoring of these methods into "detect and measure"
     if reference_image is not None:
         reference_spot_locations = spot_finding_method(reference_image, **spot_finding_kwargs)
         intensity_table = measure_spot_intensities(
