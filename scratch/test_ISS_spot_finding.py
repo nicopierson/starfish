@@ -22,6 +22,7 @@ Globally, this explores what users can do, given prior information about their s
 import os
 import napari_gui
 import numpy as np
+import xarray as xr
 import starfish.data
 import starfish.display
 from starfish.image import Filter, Registration, Segmentation
@@ -99,7 +100,7 @@ starfish.display.stack(image)
 # it looks like the smallest radius (7) is doing the best job, use that.
 # weighted vs unweighted didn't make much of a difference.
 
-tophat = partial(white_tophat, selem=selems[0])
+tophat = partial(white_tophat, selem=create_weighted_disk(7))
 
 background_subtracted = cropped.apply(
     tophat,
@@ -120,6 +121,7 @@ starfish.display.stack(image)
 # A popular approach is quantile normalization, to equalize two or more images.
 # It's also possible to scale based on a near-maximal value that excludes outliers.
 
+
 def quantile_normalize(xarray):
     stacked = xarray.stack(pixels=(Axes.X.value, Axes.Y.value, Axes.ZPLANE.value))
     inds = stacked.groupby(Axes.CH.value).apply(np.argsort)
@@ -136,6 +138,7 @@ def quantile_normalize(xarray):
         output[v] = rank[pos[v].values].values
 
     return output.unstack("pixels")
+
 
 quantile_normalized = background_subtracted.xarray.groupby(
     Axes.ROUND.value
@@ -156,6 +159,46 @@ starfish.display.stack(quantile_normalized)
 # )
 #
 # histogram_normalized = background_subtracted.apply(match_r1c1, group_by={Axes.ROUND, Axes.CH})
+
+###################################################################################################
+# TEST DECODING FILTER
+
+traces = quantile_normalized.xarray.stack(
+    features=(Axes.ZPLANE.value, Axes.Y.value, Axes.X.value)
+)
+traces = traces.transpose(Features.AXIS, Axes.CH.value, Axes.ROUND.value)
+CODEBOOK = experiment.codebook
+res = CODEBOOK.metric_decode(traces, max_distance=1, min_intensity=0, norm_order=2)
+
+# could use this data to produce a label image in the "max_probability" case -- but it's not ideal,
+# would rather have the whole space
+
+# break down the decoder
+NORM_ORDER = 2
+norm_intensities, norms = CODEBOOK._normalize_features(traces, norm_order=NORM_ORDER)
+norm_codes, _ = CODEBOOK._normalize_features(CODEBOOK, norm_order=NORM_ORDER)
+
+# use scipy cdist to generate the resulting distance matrix -- this will take a while!
+from scipy.spatial.distance import cdist  # noqa
+intensity_traces = norm_intensities.stack(traces=(Axes.CH.value, Axes.ROUND.value))
+intensity_codes = norm_codes.stack(traces=(Axes.CH.value, Axes.ROUND.value))
+distances = cdist(intensity_traces, intensity_codes)
+
+# reshape into an ImageStack
+distances = xr.DataArray(distances, coords=(norm_intensities.features, norm_codes.target))
+distances = distances.unstack(Features.AXIS)
+distances = distances.rename(target=Axes.CH.value)
+distance_image = distances.expand_dims(Axes.ROUND.value)
+
+# normalize into (0, 1) -- probably _don't_ want this, but we require it for ImageStack :( :(
+normalized_image = distance_image / distance_image.max()
+
+imagestack = starfish.ImageStack.from_numpy_array(normalized_image.values)
+
+
+metric_outputs, targets = CODEBOOK._approximate_nearest_code(
+    norm_codes, norm_intensities, metric=metric)
+
 
 ###################################################################################################
 # CALL SPOTS

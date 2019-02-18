@@ -318,6 +318,7 @@ class IntensityTable(xr.DataArray):
 
         return intensities
 
+    # TODO deprecate
     @classmethod
     def from_image_stack(
             cls,
