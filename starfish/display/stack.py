@@ -111,8 +111,8 @@ def _spots_to_markers(intensity_table: IntensityTable) -> Tuple[np.ndarray, np.n
     return coords, vector_sizes
 
 def _plot_markers(
-    window,
-    spots: Optional[IntensityTable],
+    viewer,
+    spots: IntensityTable,
     project_axes: Optional[Set[Axes]],
     mask_intensities: float,
     radius_multiplier: Number,
@@ -128,18 +128,18 @@ def _plot_markers(
 
     if not np.sum(mask):
         warnings.warn(f"No spots passed provided intensity threshold of {mask_intensities}")
-        return window
+        return viewer
 
     coords = coords[mask, :]
     sizes = sizes[mask, :]
 
-    window.viewer.add_markers(
+    viewer.add_markers(
         coords=coords, face_color=color, edge_color=color, symbol="o",
         size=sizes * radius_multiplier,
         n_dimensional=True
     )
 
-    return window
+    return viewer
 
 
 def stack(
@@ -237,13 +237,13 @@ def stack(
     ).values
 
     # display the imagestack using napari
-    window = napari_gui.imshow(reordered_array, multichannel=False)
+    viewer = napari_gui.imshow(reordered_array, multichannel=False)
 
     if spots is not None:
-        _plot_markers(window, spots, project_axes, mask_intensities, radius_multiplier, color="c")
+        _plot_markers(viewer, spots, project_axes, mask_intensities, radius_multiplier, color="c")
 
     if extra_spots is not None:
         for name, (color, espots) in extra_spots.items():
-            _plot_markers(window, espots, project_axes, mask_intensities, radius_multiplier, color)
+            _plot_markers(viewer, espots, project_axes, mask_intensities, radius_multiplier, color)
 
-    return window
+    return viewer
