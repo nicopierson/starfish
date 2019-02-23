@@ -57,7 +57,7 @@ from starfish.imagestack.parser.crop import CropParameters  # noqa
 experiment = starfish.Experiment.from_json(os.path.expanduser('~/scratch/seqfish/experiment.json'))
 fov = experiment['fov_000']
 
-crop_params = CropParameters(x_slice=slice(0, 1024), y_slice=slice(1024, 2048))
+crop_params = CropParameters(x_slice=slice(0, 512), y_slice=slice(1536, 2048))
 image = fov.get_image('primary', crop_params)
 
 
@@ -139,10 +139,65 @@ def create_weighted_disk(selem_radius):
 # subtract the background in-place
 tophat = partial(white_tophat, selem=create_weighted_disk(7))
 
-image.apply(
+background_substracted = image.apply(
     tophat,
-    group_by={Axes.ROUND, Axes.CH, Axes.ZPLANE}, verbose=False, in_place=True, n_processes=16
+    group_by={Axes.ROUND, Axes.CH, Axes.ZPLANE}, verbose=False, in_place=False, n_processes=16
 )
+
+##################################################################################################
+# Try to implement a 3-level otsu
+
+##############################################################################################
+# TEST THE DECODING FILTER
+
+import xarray as xr
+
+traces = background_substracted.xarray.stack(
+    features=(Axes.ZPLANE.value, Axes.Y.value, Axes.X.value)
+)
+traces = traces.transpose(Features.AXIS, Axes.CH.value, Axes.ROUND.value)
+CODEBOOK = experiment.codebook
+
+# for scale purposes, grab just the first 100 codes
+CODEBOOK = CODEBOOK[:100]
+
+res = CODEBOOK.metric_decode(traces, max_distance=1, min_intensity=0, norm_order=2)
+
+# could use this data to produce a label image in the "max_probability" case -- but it's not ideal,
+# would rather have the whole space
+
+# break down the decoder
+NORM_ORDER = 2
+norm_intensities, norms = CODEBOOK._normalize_features(traces, norm_order=NORM_ORDER)
+norm_codes, _ = CODEBOOK._normalize_features(CODEBOOK, norm_order=NORM_ORDER)
+
+# use scipy cdist to generate the resulting distance matrix -- this will take a while!
+from scipy.spatial.distance import cdist  # noqa
+intensity_traces = norm_intensities.stack(traces=(Axes.CH.value, Axes.ROUND.value))
+intensity_codes = norm_codes.stack(traces=(Axes.CH.value, Axes.ROUND.value))
+distances = cdist(intensity_traces, intensity_codes)
+
+# reshape into an ImageStack
+distances = xr.DataArray(distances, coords=(norm_intensities.features, norm_codes.target))
+distances = distances.unstack(Features.AXIS)
+distances = distances.rename(target=Axes.CH.value)
+distance_image = distances.expand_dims(Axes.ROUND.value)
+
+# normalize into (0, 1) -- probably _don't_ want this, but we require it for ImageStack :( :(
+normalized_image = distance_image / distance_image.max()
+
+imagestack = starfish.ImageStack.from_numpy_array(normalized_image.values)
+
+
+metric_outputs, targets = CODEBOOK._approximate_nearest_code(
+    norm_codes, norm_intensities, metric="euclidean")
+
+###################################################################################################
+# INTERPRET THE DECODING
+
+# for each pixel, calculate the peakiness of the distribution. Threshold away pixels that aren't
+# close to any pixel, or are too close to multiple other pixels.
+
 
 ###################################################################################################
 # INITIAL SPOT FINDING
