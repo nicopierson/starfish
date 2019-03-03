@@ -57,9 +57,9 @@ from starfish.imagestack.parser.crop import CropParameters  # noqa
 experiment = starfish.Experiment.from_json(os.path.expanduser('~/scratch/seqfish/experiment.json'))
 fov = experiment['fov_000']
 
-crop_params = CropParameters(x_slice=slice(0, 512), y_slice=slice(1536, 2048))
-image = fov.get_image('primary', crop_params)
-
+x_slice = slice(0, 512)
+y_slice = slice(1536, 2048)
+image = fov.get_image('primary', x_slice=x_slice, y_slice=y_slice)
 
 ###################################################################################################
 # Register the data, if it isn't.
@@ -112,6 +112,11 @@ def warp_imagestack(imagestack, transform_set, chunk_by: Tuple):
 
 image = warp_imagestack(image, round_to_tf, chunk_by=("r", "c", "z"))
 
+# after registration, get a very small subset for decoding use.
+image = image.sel({Axes.Y: (64, 280), Axes.X: (183, 380), Axes.ZPLANE: (5, 16)})
+
+# we have a bug right now that only allows z-ranges that start with zero.
+image.xarray['z'] = np.arange(image.xarray.sizes['z'])
 
 ###################################################################################################
 # remove background from the data and equalize the channels.
@@ -141,27 +146,45 @@ tophat = partial(white_tophat, selem=create_weighted_disk(7))
 
 background_substracted = image.apply(
     tophat,
-    group_by={Axes.ROUND, Axes.CH, Axes.ZPLANE}, verbose=False, in_place=False, n_processes=16
+    group_by={Axes.ROUND, Axes.CH, Axes.ZPLANE}, verbose=False, in_place=False, n_processes=8,
 )
 
 ##################################################################################################
-# Try to implement a 3-level otsu
+# remove high-value outliers
+sbp = starfish.image.Filter.ScaleByPercentile(p=99, is_volume=True)
+scaled = sbp.run(background_substracted, in_place=False, n_processes=16)
+
+# clip low-value fluorescence
+scaled.xarray.values[scaled.xarray.values < 0.5] = 0
 
 ##############################################################################################
 # TEST THE DECODING FILTER
 
-import xarray as xr
+import xarray as xr  # noqa
 
-traces = background_substracted.xarray.stack(
+traces = scaled.xarray.stack(
     features=(Axes.ZPLANE.value, Axes.Y.value, Axes.X.value)
 )
 traces = traces.transpose(Features.AXIS, Axes.CH.value, Axes.ROUND.value)
 CODEBOOK = experiment.codebook
 
 # for scale purposes, grab just the first 100 codes
-CODEBOOK = CODEBOOK[:100]
+# CODEBOOK = CODEBOOK[:100]
 
-res = CODEBOOK.metric_decode(traces, max_distance=1, min_intensity=0, norm_order=2)
+res = CODEBOOK.metric_decode(traces, max_distance=2, min_intensity=0.1, norm_order=2)
+
+# grab a label image
+name_to_val = dict(zip(names, np.arange(len(names))))
+int_names = [name_to_val[str(n)] for n in res.target]
+res['int_target'] = ("features", int_names)
+label_image = res.unstack("features")['int_target'].values
+
+# make this fucking thing into a numpy array because otherwise napari chokes
+# label_image = np.load("label_image.npy")
+label_image = label_image / label_image.max()
+label_image.shape
+label_image = label_image.transpose(2, 0, 1)
+stack = starfish.ImageStack.from_numpy_array(label_image[None, None, :, :, :])
 
 # could use this data to produce a label image in the "max_probability" case -- but it's not ideal,
 # would rather have the whole space

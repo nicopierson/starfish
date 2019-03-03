@@ -51,14 +51,14 @@ from starfish.types import SpotAttributes
 # easy substrate to test the approaches.
 
 experiment = starfish.data.ISS()
-image = experiment['fov_001']['primary']
+image = experiment['fov_001'].get_image('primary')
 
 ###################################################################################################
 # Register the data, if it isn't.
 
 registration = Registration.FourierShiftRegistration(
     upsampling=1000,
-    reference_stack=experiment['fov_001']['dots']
+    reference_stack=experiment['fov_001'].get_image('dots')
 )
 registered = registration.run(image, in_place=False)
 
@@ -66,13 +66,11 @@ registered = registration.run(image, in_place=False)
 # image's. original shape This is bad because it interacts with the scaling later, so we need to
 # crop these out. This is accomplished by cropping by the size of the shift
 cropped = registered.sel({Axes.X: (25, -25), Axes.Y: (10, -10)})
-starfish.display.stack(cropped)
+# starfish.display.stack(cropped)
 
 ###################################################################################################
 # remove background from the data and equalize the channels. We're going to test using a weighted
 # structuring element in addition to the one built into starfish
-
-selem_radii = (7, 10, 13)
 
 def create_weighted_disk(selem_radius):
     s = ball(selem_radius)
@@ -81,21 +79,22 @@ def create_weighted_disk(selem_radius):
     weighted_disk = (255 * (s - s.min())) / (s.max() - s.min())  # Rescale weights into 0-255
     return weighted_disk
 
-selems = [create_weighted_disk(r) for r in selem_radii]
+# selem_radii = (7, 10, 13)
+# selems = [create_weighted_disk(r) for r in selem_radii]
 
 # look at the background constructed from these methods
 
-backgrounds = []
-for s in selems:
-    opening = partial(opening, selem=s)
+# backgrounds = []
+# for s in selems:
+#     opening = partial(opening, selem=s)
 
-    backgrounds.append(cropped.apply(
-        opening,
-        group_by={Axes.ROUND, Axes.CH, Axes.ZPLANE}, verbose=False, in_place=False, n_processes=8
-    ))
+#     backgrounds.append(cropped.apply(
+#         opening,
+#         group_by={Axes.ROUND, Axes.CH, Axes.ZPLANE}, verbose=False, in_place=False, n_processes=8
+#     ))
 
-viewers = [starfish.display.stack(i) for i in backgrounds]
-starfish.display.stack(image)
+# viewers = [starfish.display.stack(i) for i in backgrounds]
+# starfish.display.stack(image)
 
 # it looks like the smallest radius (7) is doing the best job, use that.
 # weighted vs unweighted didn't make much of a difference.
@@ -107,8 +106,8 @@ background_subtracted = cropped.apply(
     group_by={Axes.ROUND, Axes.CH, Axes.ZPLANE}, verbose=False, in_place=False, n_processes=8
 )
 
-starfish.display.stack(background_subtracted)
-starfish.display.stack(image)
+# starfish.display.stack(background_subtracted)
+# starfish.display.stack(image)
 
 ###################################################################################################
 # remove slices in z that are not in focus
@@ -120,7 +119,6 @@ starfish.display.stack(image)
 
 # A popular approach is quantile normalization, to equalize two or more images.
 # It's also possible to scale based on a near-maximal value that excludes outliers.
-
 
 def quantile_normalize(xarray):
     stacked = xarray.stack(pixels=(Axes.X.value, Axes.Y.value, Axes.ZPLANE.value))
@@ -145,7 +143,7 @@ quantile_normalized = background_subtracted.xarray.groupby(
 ).apply(quantile_normalize)
 quantile_normalized = starfish.ImageStack.from_numpy_array(quantile_normalized.values)
 
-starfish.display.stack(quantile_normalized)
+# starfish.display.stack(quantile_normalized)
 
 # TODO this function replicates the above, using skimage functions.
 # TODO this is coming in skimage 0.15.0, but isn't on pypi yet.
@@ -162,6 +160,16 @@ starfish.display.stack(quantile_normalized)
 
 ###################################################################################################
 # TEST DECODING FILTER
+
+dfilt = starfish.image._filter.decode.Decode(experiment.codebook)
+decoded = dfilt.run(quantile_normalized)
+
+# TEST DECODING TRANSFORM
+similarity = starfish.ImageStack.from_numpy_array(1 - decoded.xarray)
+label = similarity.max_proj(Axes.CH)
+starfish.display.stack(label)
+
+###################################################################################################
 
 traces = quantile_normalized.xarray.stack(
     features=(Axes.ZPLANE.value, Axes.Y.value, Axes.X.value)
