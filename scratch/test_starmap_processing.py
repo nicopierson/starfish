@@ -55,7 +55,7 @@ fov = experiment['fov_000']
 cp = starfish.imagestack.parser.crop.CropParameters(
     x_slice=slice(7300, 8324),
     y_slice=slice(600, 1624),
-    z_slice=slice(2, 5)
+    permitted_zplanes=list(range(2, 10)),
 )
 primary_image = starfish.ImageStack.from_tileset(fov._images['primary'], crop_parameters=cp)
 
@@ -193,6 +193,18 @@ starfish.display.stack(quantile_normalized)
 # )
 #
 # histogram_normalized = background_subtracted.apply(match_r1c1, group_by={Axes.ROUND, Axes.CH})
+
+###################################################################################################
+# TEST DECODING FILTER
+codebook = starfish.Codebook.from_json('/Users/ajc/scratch/starmap/codebook.json')[:, 1:, :]
+codebook['c'] = [0, 1, 2, 3]
+dfilt = starfish.image._filter.decode.Decode(codebook)
+decoded = dfilt.run(quantile_normalized)
+
+# TEST DECODING TRANSFORM
+similarity = starfish.ImageStack.from_numpy_array(1 - decoded.xarray)
+label = similarity.max_proj(Axes.CH)
+starfish.display.stack(label)
 
 ###################################################################################################
 # CALL SPOTS
