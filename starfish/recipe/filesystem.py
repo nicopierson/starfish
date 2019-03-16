@@ -17,3 +17,6 @@ def load(file_path_or_uri: str, object_type: Type) -> Any:
         return Codebook.from_json(file_path_or_uri)
 
     raise NotImplementedError(f"No loader implemented for file type {object_type}")
+
+def save(file_path: str, object: Any) -> None:
+    
